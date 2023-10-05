@@ -1,4 +1,4 @@
-* NES Emulator
+# NES Emulator
 This project is a personal project created in order to learn the Rust programming language, 
 as well as learning how emulators are being implemented in general.
 
