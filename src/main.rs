@@ -16,6 +16,13 @@ pub enum AddressingMode {
     NoneAddressing,
 }
 
+#[derive(Debug, Clone)]
+pub enum Register {
+    A,
+    X,
+    Y,
+}
+
 #[derive(Clone)]
 pub struct OpCode {
     pub opcode: u8,
@@ -35,19 +42,19 @@ lazy_static! {
     opcodes[0x65] = OpCode::new(0x65, "ADC", 2, 3, AddressingMode::ZeroPage);
     opcodes[0x75] = OpCode::new(0x75, "ADC", 2, 4, AddressingMode::ZeroPageX);
     opcodes[0x6d] = OpCode::new(0x6d, "ADC", 3, 4, AddressingMode::Absolute);
-    opcodes[0x7d] = OpCode::new(0x7d, "ADC", 3, 4, AddressingMode::AbsoluteX);
-    opcodes[0x79] = OpCode::new(0x79, "ADC", 3, 4, AddressingMode::AbsoluteY);
+    opcodes[0x7d] = OpCode::new(0x7d, "ADC", 3, 4 /* +1 if page crossed */, AddressingMode::AbsoluteX);
+    opcodes[0x79] = OpCode::new(0x79, "ADC", 3, 4 /* +1 if page crossed */, AddressingMode::AbsoluteY);
     opcodes[0x61] = OpCode::new(0x61, "ADC", 2, 6, AddressingMode::IndirectX);
-    opcodes[0x71] = OpCode::new(0x71, "ADC", 2, 5, AddressingMode::IndirectY);
+    opcodes[0x71] = OpCode::new(0x71, "ADC", 2, 5 /* +1 if page crossed */, AddressingMode::IndirectY);
 
     opcodes[0x29] = OpCode::new(0x29, "AND", 2, 2, AddressingMode::Immediate);
     opcodes[0x25] = OpCode::new(0x25, "AND", 2, 3, AddressingMode::ZeroPage);
     opcodes[0x35] = OpCode::new(0x35, "AND", 2, 4, AddressingMode::ZeroPageX);
     opcodes[0x2d] = OpCode::new(0x2d, "AND", 3, 4, AddressingMode::Absolute);
-    opcodes[0x3d] = OpCode::new(0x3d, "AND", 3, 4, AddressingMode::AbsoluteX);
-    opcodes[0x39] = OpCode::new(0x39, "AND", 3, 4, AddressingMode::AbsoluteY);
+    opcodes[0x3d] = OpCode::new(0x3d, "AND", 3, 4 /* +1 if page crossed */, AddressingMode::AbsoluteX);
+    opcodes[0x39] = OpCode::new(0x39, "AND", 3, 4 /* +1 if page crossed */, AddressingMode::AbsoluteY);
     opcodes[0x21] = OpCode::new(0x21, "AND", 2, 6, AddressingMode::IndirectX);
-    opcodes[0x31] = OpCode::new(0x31, "AND", 2, 5, AddressingMode::IndirectY);
+    opcodes[0x31] = OpCode::new(0x31, "AND", 2, 5 /* +1 if page crossed */, AddressingMode::IndirectY);
 
     opcodes[0x0a] = OpCode::new(0x0a, "ASL", 1, 2, AddressingMode::NoneAddressing /*accumulator*/);
     opcodes[0x06] = OpCode::new(0x06, "ASL", 2, 5, AddressingMode::ZeroPage);
@@ -57,6 +64,24 @@ lazy_static! {
 
     opcodes[0x24] = OpCode::new(0x24, "BIT", 2, 3, AddressingMode::ZeroPage);
     opcodes[0x2C] = OpCode::new(0x2C, "BIT", 3, 4, AddressingMode::Absolute);
+
+    opcodes[0xc9] = OpCode::new(0xc9, "CMP", 2, 2, AddressingMode::Immediate);
+    opcodes[0xc5] = OpCode::new(0xc5, "CMP", 2, 3, AddressingMode::ZeroPage);
+    opcodes[0xd5] = OpCode::new(0xd5, "CMP", 2, 4, AddressingMode::ZeroPageX);
+    opcodes[0xcd] = OpCode::new(0xcd, "CMP", 2, 4, AddressingMode::Absolute);
+    opcodes[0xdd] = OpCode::new(0xdd, "CMP", 3, 4 /* +1 if page crossed */, AddressingMode::AbsoluteX);
+    opcodes[0xd9] = OpCode::new(0xd9, "CMP", 3, 4 /* +1 if page crossed */, AddressingMode::AbsoluteY);
+    opcodes[0xc1] = OpCode::new(0xc1, "CMP", 2, 6, AddressingMode::IndirectX);
+    opcodes[0xd1] = OpCode::new(0xd1, "CMP", 2, 5 /* +1 if page crossed */, AddressingMode::IndirectY);
+
+    opcodes[0xe0] = OpCode::new(0xe0, "CPX", 2, 2, AddressingMode::Immediate);
+    opcodes[0xe4] = OpCode::new(0xe4, "CPX", 2, 3, AddressingMode::ZeroPage);
+    opcodes[0xec] = OpCode::new(0xec, "CPX", 3, 4, AddressingMode::Absolute);
+
+    opcodes[0xc0] = OpCode::new(0xc0, "CPY", 2, 2, AddressingMode::Immediate);
+    opcodes[0xc4] = OpCode::new(0xc4, "CPY", 2, 3, AddressingMode::ZeroPage);
+    opcodes[0xcc] = OpCode::new(0xcc, "CPY", 3, 4, AddressingMode::Absolute);
+
 
     /*
     0wy2liopcodes[0xA] = OpCode::new(0xpA, "AND", 2, 4, AddressingMode::Immediate);j0
@@ -262,6 +287,18 @@ impl CPU {
                     self.bit(&instr.addressing_mode);
                     self.program_counter += instr.bytes as u16 - 1;
                 }
+                0xc9 | 0xc5 | 0xd5 | 0xcd | 0xdd | 0xd9 | 0xc1 | 0xd1 => {
+                    self.compare_register(Register::A, &instr.addressing_mode);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0xe0|0xe4|0xec => {
+                    self.compare_register(Register::X, &instr.addressing_mode);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0xc0|0xc4|0xcc => {
+                    self.compare_register(Register::Y, &instr.addressing_mode);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
 
                 0x90 => {
                     self.branch_if_flag_status(Flag::CARRY, true);
@@ -372,6 +409,20 @@ impl CPU {
 
         self.set_zero_and_negative_status_flag(result);
         self.set_overflow_flag(Flag::from_bits(result).unwrap().contains(Flag::OVERFLOW));
+    }
+    fn compare_register(&mut self, register: Register, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+
+        let register = match register {
+            Register::A => self.register_a,
+            Register::X => self.register_x,
+            Register::Y => self.register_y,
+        };
+
+        self.status.set(Flag::CARRY, register >= value);
+        self.status.set(Flag::ZERO, register == value);
+        self.status.set(Flag::NEGATIVE, register < value);
     }
 
     // Control Flow
