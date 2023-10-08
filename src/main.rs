@@ -55,6 +55,8 @@ lazy_static! {
     opcodes[0x0e] = OpCode::new(0x0e, "ASL", 3, 6, AddressingMode::Absolute);
     opcodes[0x1e] = OpCode::new(0x1e, "ASL", 3, 7, AddressingMode::AbsoluteX);
 
+    opcodes[0x24] = OpCode::new(0x24, "BIT", 2, 3, AddressingMode::ZeroPage);
+    opcodes[0x2C] = OpCode::new(0x2C, "BIT", 3, 4, AddressingMode::Absolute);
 
     /*
     0wy2liopcodes[0xA] = OpCode::new(0xpA, "AND", 2, 4, AddressingMode::Immediate);j0
@@ -65,7 +67,10 @@ lazy_static! {
     opcodes[0x90] = OpCode::new(0x90, "BCC", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
     opcodes[0xb0] = OpCode::new(0xb0, "BCS", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
     opcodes[0xf0] = OpCode::new(0xf0, "BEQ", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
+    opcodes[0x30] = OpCode::new(0x30, "BMI", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
     opcodes[0xd0] = OpCode::new(0xd0, "BNE", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
+    opcodes[0x50] = OpCode::new(0x50, "BVC", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
+    opcodes[0x70] = OpCode::new(0x70, "BVS", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
 
 
     // interrupts
@@ -73,6 +78,10 @@ lazy_static! {
 
     // status register
     // CLC CLD CLI CLV SEC SED SEI
+    opcodes[0x18] = OpCode::new(0x18, "CLC", 1, 2, AddressingMode::NoneAddressing);
+    opcodes[0xd8] = OpCode::new(0xd8, "CLD", 1, 2, AddressingMode::NoneAddressing);
+    opcodes[0x58] = OpCode::new(0x58, "CLI", 1, 2, AddressingMode::NoneAddressing);
+    opcodes[0xb8] = OpCode::new(0xb8, "CLV", 1, 2, AddressingMode::NoneAddressing);
 
     // a,x,y registers
     // CPX CPY DEX DEY INC INX INY LDA LDX LDY STA STX STY TAX TAY TSX TXA TXS TYA
@@ -249,24 +258,48 @@ impl CPU {
                 0x0a => {
                     self.asl_accumulator();
                 }
+                0x24 | 0x2c => {
+                    self.bit(&instr.addressing_mode);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
 
                 0x90 => {
-                    self.bcc();
+                    self.branch_if_flag_status(Flag::CARRY, true);
                     self.program_counter += instr.bytes as u16 - 1;
                 }
                 0xb0 => {
-                    self.bcs();
+                    self.branch_if_flag_status(Flag::CARRY, false);
                     self.program_counter += instr.bytes as u16 - 1;
                 }
                 0xf0 => {
-                    self.beq();
+                    self.branch_if_flag_status(Flag::ZERO, true);
                     self.program_counter += instr.bytes as u16 - 1;
                 }
                 0xd0 => {
-                    self.bne();
+                    self.branch_if_flag_status(Flag::ZERO, false);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0x30 => {
+                    self.branch_if_flag_status(Flag::NEGATIVE, true);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0x10 => {
+                    self.branch_if_flag_status(Flag::NEGATIVE, false);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0x50 => {
+                    self.branch_if_flag_status(Flag::OVERFLOW, false);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0x70 => {
+                    self.branch_if_flag_status(Flag::OVERFLOW, true);
                     self.program_counter += instr.bytes as u16 - 1;
                 }
 
+                0x18 => self.status.remove(Flag::CARRY),
+                0xd8 => self.status.remove(Flag::DECIMAL_MODE),
+                0x58 => self.status.remove(Flag::INTERRUPT_DISABLE),
+                0xb8 => self.status.remove(Flag::OVERFLOW),
 
                 0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
                     self.lda(&instr.addressing_mode);
@@ -331,25 +364,19 @@ impl CPU {
         self.set_overflow_flag(overflow);
         self.set_zero_and_negative_status_flag(result);
     }
+    fn bit(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+
+        let result = self.register_a & value;
+
+        self.set_zero_and_negative_status_flag(result);
+        self.set_overflow_flag(Flag::from_bits(result).unwrap().contains(Flag::OVERFLOW));
+    }
 
     // Control Flow
-    fn bcc(&mut self) {
-        if self.status.contains(Flag::CARRY) {
-            self.program_counter += self.mem_read(self.program_counter) as u16;
-        }
-    }
-    fn bcs(&mut self) {
-        if !self.status.contains(Flag::CARRY) {
-            self.program_counter += self.mem_read(self.program_counter) as u16;
-        }
-    }
-    fn beq(&mut self) {
-        if self.status.contains(Flag::ZERO) {
-            self.program_counter += self.mem_read(self.program_counter) as u16;
-        }
-    }
-    fn bne(&mut self) {
-        if !self.status.contains(Flag::ZERO) {
+    fn branch_if_flag_status(&mut self, flag: Flag, is_set: bool) {
+        if self.status.contains(flag) == is_set {
             self.program_counter += self.mem_read(self.program_counter) as u16;
         }
     }
