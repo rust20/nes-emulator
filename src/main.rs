@@ -12,6 +12,7 @@ pub enum AddressingMode {
     AbsoluteY,
     IndirectX,
     IndirectY,
+    Relative,
     NoneAddressing,
 }
 
@@ -29,7 +30,7 @@ lazy_static! {
     let mut opcodes = vec![OpCode::new(0x00, "BRK", 1, 7, AddressingMode::NoneAddressing); 256];
 
     // arithmetic & logic
-    // adc and asl bit cmp dec eor lsr ora rol ror sbc
+    // ADC AND ASL BIT CMP DEC EOR LSR ORA ROL ROR SBC
     opcodes[0x69] = OpCode::new(0x69, "ADC", 2, 2, AddressingMode::Immediate);
     opcodes[0x65] = OpCode::new(0x65, "ADC", 2, 3, AddressingMode::ZeroPage);
     opcodes[0x75] = OpCode::new(0x75, "ADC", 2, 4, AddressingMode::ZeroPageX);
@@ -54,21 +55,27 @@ lazy_static! {
     opcodes[0x0e] = OpCode::new(0x0e, "ASL", 3, 6, AddressingMode::Absolute);
     opcodes[0x1e] = OpCode::new(0x1e, "ASL", 3, 7, AddressingMode::AbsoluteX);
 
+
     /*
     0wy2liopcodes[0xA] = OpCode::new(0xpA, "AND", 2, 4, AddressingMode::Immediate);j0
     */
 
     // control flow
-    // bcc bcs beq bmi bne bpl bvc bvs mp jsr rts
+    // BCC BCS BEQ BMI BNE BPL BVC BVS MP JSR RTS
+    opcodes[0x90] = OpCode::new(0x90, "BCC", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
+    opcodes[0xb0] = OpCode::new(0xb0, "BCS", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
+    opcodes[0xf0] = OpCode::new(0xf0, "BEQ", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
+    opcodes[0xd0] = OpCode::new(0xd0, "BNE", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
+
 
     // interrupts
-    // brk rti
+    // BRK RTI
 
     // status register
-    // clc cld cli clv sec sed sei
+    // CLC CLD CLI CLV SEC SED SEI
 
     // a,x,y registers
-    // cpx cpy dex dey inc inx iny lda ldx ldy sta stx sty tax tay tsx txa txs tya
+    // CPX CPY DEX DEY INC INX INY LDA LDX LDY STA STX STY TAX TAY TSX TXA TXS TYA
 
     // NOP
 
@@ -184,6 +191,9 @@ impl CPU {
                 self.mem_read_u16(base as u16)
                     .wrapping_add(self.register_y as u16)
             }
+            AddressingMode::Relative => {
+                self.program_counter + self.mem_read(self.program_counter) as u16
+            }
             AddressingMode::NoneAddressing => panic!("mode {:?} is not supported", mode),
         }
     }
@@ -228,7 +238,7 @@ impl CPU {
                     self.program_counter += instr.bytes as u16 - 1;
                 }
 
-                0x29 | 0x25 | 0x35 | 0x2d | 0x3d | 0x39 | 0x21 | 0x31  => {
+                0x29 | 0x25 | 0x35 | 0x2d | 0x3d | 0x39 | 0x21 | 0x31 => {
                     self.and(&instr.addressing_mode);
                     self.program_counter += instr.bytes as u16 - 1;
                 }
@@ -239,6 +249,25 @@ impl CPU {
                 0x0a => {
                     self.asl_accumulator();
                 }
+
+                0x90 => {
+                    self.bcc();
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0xb0 => {
+                    self.bcs();
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0xf0 => {
+                    self.beq();
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0xd0 => {
+                    self.bne();
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+
+
                 0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
                     self.lda(&instr.addressing_mode);
                     self.program_counter += instr.bytes as u16 - 1;
@@ -268,6 +297,7 @@ impl CPU {
         self.load_and_run(program);
     }
 
+    // Arithmetic & logic
     fn adc(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
         let value = self.mem_read(addr);
@@ -295,7 +325,6 @@ impl CPU {
         self.set_overflow_flag(overflow);
         self.set_zero_and_negative_status_flag(result);
     }
-
     fn asl_accumulator(&mut self) {
         let (result, overflow) = self.register_a.overflowing_shl(1);
         self.register_a = result;
@@ -303,6 +332,27 @@ impl CPU {
         self.set_zero_and_negative_status_flag(result);
     }
 
+    // Control Flow
+    fn bcc(&mut self) {
+        if self.status.contains(Flag::CARRY) {
+            self.program_counter += self.mem_read(self.program_counter) as u16;
+        }
+    }
+    fn bcs(&mut self) {
+        if !self.status.contains(Flag::CARRY) {
+            self.program_counter += self.mem_read(self.program_counter) as u16;
+        }
+    }
+    fn beq(&mut self) {
+        if self.status.contains(Flag::ZERO) {
+            self.program_counter += self.mem_read(self.program_counter) as u16;
+        }
+    }
+    fn bne(&mut self) {
+        if !self.status.contains(Flag::ZERO) {
+            self.program_counter += self.mem_read(self.program_counter) as u16;
+        }
+    }
 
     fn lda(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
@@ -391,4 +441,9 @@ mod test {
 
         assert_eq!(cpu.register_a, 0x55);
     }
+
+    // #[test]
+    // fn test_bcc_correct_jump() {
+    //     let mut cpu = CPU::new();
+    // }
 }
