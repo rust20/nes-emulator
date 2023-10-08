@@ -74,20 +74,17 @@ lazy_static! {
     opcodes[0xc1] = OpCode::new(0xc1, "CMP", 2, 6, AddressingMode::IndirectX);
     opcodes[0xd1] = OpCode::new(0xd1, "CMP", 2, 5 /* +1 if page crossed */, AddressingMode::IndirectY);
 
-    opcodes[0xe0] = OpCode::new(0xe0, "CPX", 2, 2, AddressingMode::Immediate);
-    opcodes[0xe4] = OpCode::new(0xe4, "CPX", 2, 3, AddressingMode::ZeroPage);
-    opcodes[0xec] = OpCode::new(0xec, "CPX", 3, 4, AddressingMode::Absolute);
-
-    opcodes[0xc0] = OpCode::new(0xc0, "CPY", 2, 2, AddressingMode::Immediate);
-    opcodes[0xc4] = OpCode::new(0xc4, "CPY", 2, 3, AddressingMode::ZeroPage);
-    opcodes[0xcc] = OpCode::new(0xcc, "CPY", 3, 4, AddressingMode::Absolute);
+    opcodes[0xc6] = OpCode::new(0xc6, "DEC", 2, 5, AddressingMode::ZeroPage);
+    opcodes[0xd6] = OpCode::new(0xd6, "DEC", 2, 6, AddressingMode::ZeroPageX);
+    opcodes[0xce] = OpCode::new(0xce, "DEC", 3, 6, AddressingMode::Absolute);
+    opcodes[0xde] = OpCode::new(0xde, "DEC", 3, 7, AddressingMode::AbsoluteX);
 
 
     /*
     0wy2liopcodes[0xA] = OpCode::new(0xpA, "AND", 2, 4, AddressingMode::Immediate);j0
     */
 
-    // control flow
+    // Control Flow
     // BCC BCS BEQ BMI BNE BPL BVC BVS MP JSR RTS
     opcodes[0x90] = OpCode::new(0x90, "BCC", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
     opcodes[0xb0] = OpCode::new(0xb0, "BCS", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
@@ -98,22 +95,34 @@ lazy_static! {
     opcodes[0x70] = OpCode::new(0x70, "BVS", 2, 2 /*+1 if branch success, +2 if to a new page*/, AddressingMode::Relative);
 
 
-    // interrupts
+    // Interrupts
     // BRK RTI
 
-    // status register
+    // Status Register
     // CLC CLD CLI CLV SEC SED SEI
     opcodes[0x18] = OpCode::new(0x18, "CLC", 1, 2, AddressingMode::NoneAddressing);
     opcodes[0xd8] = OpCode::new(0xd8, "CLD", 1, 2, AddressingMode::NoneAddressing);
     opcodes[0x58] = OpCode::new(0x58, "CLI", 1, 2, AddressingMode::NoneAddressing);
     opcodes[0xb8] = OpCode::new(0xb8, "CLV", 1, 2, AddressingMode::NoneAddressing);
 
-    // a,x,y registers
+    // A,X,Y Registers
     // CPX CPY DEX DEY INC INX INY LDA LDX LDY STA STX STY TAX TAY TSX TXA TXS TYA
+    opcodes[0xe0] = OpCode::new(0xe0, "CPX", 2, 2, AddressingMode::Immediate);
+    opcodes[0xe4] = OpCode::new(0xe4, "CPX", 2, 3, AddressingMode::ZeroPage);
+    opcodes[0xec] = OpCode::new(0xec, "CPX", 3, 4, AddressingMode::Absolute);
+
+    opcodes[0xc0] = OpCode::new(0xc0, "CPY", 2, 2, AddressingMode::Immediate);
+    opcodes[0xc4] = OpCode::new(0xc4, "CPY", 2, 3, AddressingMode::ZeroPage);
+    opcodes[0xcc] = OpCode::new(0xcc, "CPY", 3, 4, AddressingMode::Absolute);
+
+    opcodes[0xca] = OpCode::new(0xca, "DEX", 1, 2, AddressingMode::NoneAddressing);
+    opcodes[0x88] = OpCode::new(0x88, "DEY", 1, 2, AddressingMode::NoneAddressing);
+
+
 
     // NOP
 
-    // stack related
+    // Stack Related
     // pha php pla plp
 
 
@@ -291,15 +300,12 @@ impl CPU {
                     self.compare_register(Register::A, &instr.addressing_mode);
                     self.program_counter += instr.bytes as u16 - 1;
                 }
-                0xe0|0xe4|0xec => {
-                    self.compare_register(Register::X, &instr.addressing_mode);
-                    self.program_counter += instr.bytes as u16 - 1;
-                }
-                0xc0|0xc4|0xcc => {
-                    self.compare_register(Register::Y, &instr.addressing_mode);
+                0xc6 | 0xd6 | 0xce | 0xde => {
+                    self.dec(&instr.addressing_mode);
                     self.program_counter += instr.bytes as u16 - 1;
                 }
 
+                // Control Flow
                 0x90 => {
                     self.branch_if_flag_status(Flag::CARRY, true);
                     self.program_counter += instr.bytes as u16 - 1;
@@ -333,10 +339,23 @@ impl CPU {
                     self.program_counter += instr.bytes as u16 - 1;
                 }
 
+                // Status Register
                 0x18 => self.status.remove(Flag::CARRY),
                 0xd8 => self.status.remove(Flag::DECIMAL_MODE),
                 0x58 => self.status.remove(Flag::INTERRUPT_DISABLE),
                 0xb8 => self.status.remove(Flag::OVERFLOW),
+
+                // A, X, Y Register
+                0xe0 | 0xe4 | 0xec => {
+                    self.compare_register(Register::X, &instr.addressing_mode);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0xc0 | 0xc4 | 0xcc => {
+                    self.compare_register(Register::Y, &instr.addressing_mode);
+                    self.program_counter += instr.bytes as u16 - 1;
+                }
+                0xca => self.dex(),
+                0x88 => self.dey(),
 
                 0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
                     self.lda(&instr.addressing_mode);
@@ -424,12 +443,30 @@ impl CPU {
         self.status.set(Flag::ZERO, register == value);
         self.status.set(Flag::NEGATIVE, register < value);
     }
+    fn dec(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+
+        let result = value.wrapping_sub(1);
+        self.mem_write(addr, result);
+        self.set_zero_and_negative_status_flag(result);
+    }
 
     // Control Flow
     fn branch_if_flag_status(&mut self, flag: Flag, is_set: bool) {
         if self.status.contains(flag) == is_set {
             self.program_counter += self.mem_read(self.program_counter) as u16;
         }
+    }
+
+    // A, X, Y Register
+    fn dex(&mut self) {
+        self.register_x = self.register_x.wrapping_sub(1);
+        self.set_zero_and_negative_status_flag(self.register_x);
+    }
+    fn dey(&mut self) {
+        self.register_y = self.register_y.wrapping_sub(1);
+        self.set_zero_and_negative_status_flag(self.register_y);
     }
 
     fn lda(&mut self, mode: &AddressingMode) {
