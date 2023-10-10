@@ -392,13 +392,13 @@ impl CPU {
             let opscode = self.mem_read(self.program_counter);
             self.program_counter += 1;
             let instr = &CPU_OPS_CODES[opscode as usize];
-            // println!(
-            //     "{:#04x}: inst:{} pc:{:#04x} sp:{:#04x}",
-            //     opscode,
-            //     instr.instr,
-            //     self.program_counter - 1,
-            //     self.stack_pointer,
-            // );
+            println!(
+                "{:#04x}: inst:{} pc:{:#04x} sp:{:#04x}",
+                opscode,
+                instr.instr,
+                self.program_counter - 1,
+                self.stack_pointer,
+            );
             // println!(
             //     "{:#04x} {:#04x} {:#04x}",
             //     self.memory[self.stack_pointer as usize - 1],
@@ -596,8 +596,9 @@ impl CPU {
         self.register_a = result;
         if overflow {
             self.status.insert(Flag::CARRY);
-            self.status.insert(Flag::OVERFLOW);
+            // self.status.insert(Flag::OVERFLOW);
         }
+        self.status.set(Flag::OVERFLOW, (result & 0x80) == 0x80);
         self.set_zero_and_negative_status_flag(self.register_a);
     }
     fn and(&mut self, mode: &AddressingMode) {
@@ -727,7 +728,7 @@ impl CPU {
         self.program_counter = addr;
     }
     fn jsr(&mut self, mode: &AddressingMode) {
-        self.mem_write_u16(self.stack_pointer as u16 - 1, self.program_counter + 2);
+        self.mem_write_u16(self.stack_pointer as u16 - 1 + 0x100, self.program_counter + 2);
         self.stack_pointer -= 2;
 
         let addr = self.get_operand_address(mode);
@@ -735,14 +736,14 @@ impl CPU {
     }
     fn rts(&mut self) {
         self.stack_pointer = self.stack_pointer + 2;
-        self.program_counter = self.mem_read_u16(self.stack_pointer as u16 - 1);
+        self.program_counter = self.mem_read_u16(self.stack_pointer as u16 - 1 + 0x100);
     }
 
     // Interrupts
     fn brk(&mut self) {
-        self.mem_write_u16(self.stack_pointer as u16 - 1, self.program_counter);
+        self.mem_write_u16(self.stack_pointer as u16 - 1 + 0x100, self.program_counter);
         self.mem_write(
-            self.stack_pointer as u16 - 2,
+            self.stack_pointer as u16 - 2 + 0x100,
             (self.status | Flag::BREAK_CMD).bits(),
         );
         self.stack_pointer -= 3;
@@ -753,7 +754,7 @@ impl CPU {
     fn rti(&mut self) {
         self.plp();
         self.stack_pointer += 2;
-        self.program_counter = self.mem_read_u16(self.stack_pointer as u16 - 1);
+        self.program_counter = self.mem_read_u16(self.stack_pointer as u16 - 1 + 0x100);
     }
 
     // A, X, Y Register
@@ -840,24 +841,24 @@ impl CPU {
 
     // Stack Related
     fn pha(&mut self) {
-        self.mem_write(self.stack_pointer as u16, self.register_a);
+        self.mem_write(self.stack_pointer as u16 + 0x100, self.register_a);
         self.stack_pointer -= 1;
     }
     fn php(&mut self) {
         self.mem_write(
-            self.stack_pointer as u16,
+            self.stack_pointer as u16 + 0x100,
             (self.status | Flag::BREAK_CMD).bits(),
         );
         self.stack_pointer -= 1;
     }
     fn pla(&mut self) {
         self.stack_pointer += 1;
-        self.register_a = self.mem_read(self.stack_pointer as u16);
+        self.register_a = self.mem_read(self.stack_pointer as u16 + 0x100);
         self.set_zero_and_negative_status_flag(self.register_a);
     }
     fn plp(&mut self) {
         self.stack_pointer += 1;
-        let result = self.mem_read(self.stack_pointer as u16);
+        let result = self.mem_read(self.stack_pointer as u16 + 0x100);
         self.status = Flag::from_bits(result).unwrap();
     }
 
@@ -1008,6 +1009,27 @@ fn read_screen_state(cpu: &CPU, frame: &mut [u8; 32 * 3 * 32]) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_adc_positive_overflow() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x7f, 0x69, 0x01]);
+        assert_eq!(cpu.status.contains(Flag::OVERFLOW), true);
+    }
+
+    #[test]
+    fn test_adc_negative_overflow() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x7f, 0x69, 0x80]);
+        assert_eq!(cpu.status.contains(Flag::OVERFLOW), true);
+    }
+
+    #[test]
+    fn test_adc_no_overflow() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x40, 0x69, 0x20]);
+        assert_eq!(cpu.status.contains(Flag::OVERFLOW), false);
+    }
 
     #[test]
     fn test_0xa9_lda_immediate_load_data() {
@@ -1165,7 +1187,38 @@ mod test {
             // end:
             0x00,
         ]);
-        println!("{}", cpu.register_x);
         assert_eq!(cpu.register_x, 0x05);
+    }
+
+    #[test]
+    fn test_stack() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![
+            0xa2, 0x00, 
+            0xa0, 0x00, 
+
+            0x8a, 
+            0x99, 0x00, 0x02, 
+            0x48, 
+            0xe8, 
+            0xc8, 
+            0xc0, 0x10, 
+            0xd0, 0xf5,
+
+            0x68, 
+            0x99, 0x00, 0x02, 
+            0xc8, 
+            0xc0, 0x20, 
+            0xd0, 0xf7, 
+        ]);
+
+        for i in 0x00..0x10 {
+            println!("{} {}", cpu.memory[(0x0200 as u16 + i as u16) as usize], i);
+            assert_eq!(cpu.memory[(0x0200 as u16 + i as u16) as usize], i);
+        }
+        for i in 0x00..0x10 {
+            println!("{} {}", cpu.memory[(0x0210 as u16 + i as u16) as usize], 0x0f-i);
+            assert_eq!(cpu.memory[(0x0210 as u16 + i as u16) as usize], 0x0f-i);
+        }
     }
 }
