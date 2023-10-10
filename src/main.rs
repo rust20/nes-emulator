@@ -344,7 +344,8 @@ impl CPU {
             AddressingMode::Relative => {
                 self.program_counter + self.mem_read(self.program_counter) as u16
             }
-            AddressingMode::NoneAddressing => panic!("mode {:?} is not supported", mode),
+            // AddressingMode::NoneAddressing => panic!("mode {:?} is not supported", mode),
+            AddressingMode::NoneAddressing => 0,
         }
     }
 
@@ -387,10 +388,23 @@ impl CPU {
         F: FnMut(&mut CPU),
     {
         loop {
+            callback(self);
             let opscode = self.mem_read(self.program_counter);
             self.program_counter += 1;
             let instr = &CPU_OPS_CODES[opscode as usize];
-            // println!("{:#04x}: {}", opscode, instr.instr);
+            // println!(
+            //     "{:#04x}: inst:{} pc:{:#04x} sp:{:#04x}",
+            //     opscode,
+            //     instr.instr,
+            //     self.program_counter - 1,
+            //     self.stack_pointer,
+            // );
+            // println!(
+            //     "{:#04x} {:#04x} {:#04x}",
+            //     self.memory[self.stack_pointer as usize - 1],
+            //     self.memory[self.stack_pointer as usize],
+            //     self.memory[self.stack_pointer as usize + 1],
+            // );
             match opscode {
                 0x69 | 0x65 | 0x75 | 0x6d | 0x7d | 0x79 | 0x61 | 0x71 => {
                     self.adc(&instr.addressing_mode);
@@ -479,17 +493,14 @@ impl CPU {
                     self.branch_if_flag_status(Flag::OVERFLOW, true);
                     self.program_counter += instr.bytes as u16 - 1;
                 }
-                0x4c | 0x6c => {
-                    self.jmp(&instr.addressing_mode);
-                }
-                0x20 => {
-                    self.jsr(&instr.addressing_mode);
-                    self.program_counter += instr.bytes as u16 - 1;
-                }
+                0x4c | 0x6c => self.jmp(&instr.addressing_mode),
+
+                0x20 => self.jsr(&instr.addressing_mode),
                 0x60 => self.rts(),
 
                 // Interrupts
-                0x00 => self.brk(),
+                // 0x00 => self.brk(),
+                0x00 => return,
                 0x40 => self.rti(),
 
                 // Status Register
@@ -559,7 +570,7 @@ impl CPU {
                 0x68 => self.pla(),
                 0x28 => self.plp(),
 
-                _ => todo!(),
+                _ => todo!("{opscode} not implemented at {}", self.program_counter),
             }
         }
     }
@@ -569,6 +580,7 @@ impl CPU {
         self.register_x = 0;
         self.status = Flag::empty();
         self.program_counter = self.mem_read_u16(0xFFFC);
+        self.stack_pointer = 0xff;
     }
 
     pub fn interpret(&mut self, program: Vec<u8>) {
@@ -715,14 +727,14 @@ impl CPU {
         self.program_counter = addr;
     }
     fn jsr(&mut self, mode: &AddressingMode) {
-        self.mem_write_u16(self.stack_pointer as u16 - 1, self.program_counter);
+        self.mem_write_u16(self.stack_pointer as u16 - 1, self.program_counter + 2);
         self.stack_pointer -= 2;
 
         let addr = self.get_operand_address(mode);
-        self.program_counter = addr - 1;
+        self.program_counter = addr;
     }
     fn rts(&mut self) {
-        self.stack_pointer += 2;
+        self.stack_pointer = self.stack_pointer + 2;
         self.program_counter = self.mem_read_u16(self.stack_pointer as u16 - 1);
     }
 
@@ -735,7 +747,7 @@ impl CPU {
         );
         self.stack_pointer -= 3;
 
-        self.program_counter = self.mem_read_u16(0xFFFE);
+        self.program_counter = self.mem_read_u16(0xFFFd);
         self.status.insert(Flag::BREAK_CMD);
     }
     fn rti(&mut self) {
@@ -977,11 +989,11 @@ fn color(byte: u8) -> Color {
 fn read_screen_state(cpu: &CPU, frame: &mut [u8; 32 * 3 * 32]) -> bool {
     let mut frame_idx = 0;
     let mut update = false;
-    for i in 0x0200..0x600 {
+    for i in 0x200..0x600 {
         let color_idx = cpu.mem_read(i as u16);
         let (b1, b2, b3) = color(color_idx).rgb();
 
-        if frame[frame_idx] != b1 || frame[frame_idx + 2] != b2 || frame[frame_idx + 3] != b3 {
+        if frame[frame_idx] != b1 || frame[frame_idx + 1] != b2 || frame[frame_idx + 2] != b3 {
             frame[frame_idx] = b1;
             frame[frame_idx + 1] = b2;
             frame[frame_idx + 2] = b3;
@@ -1124,5 +1136,36 @@ mod test {
             0xa2, 0x08, 0xca, 0x8e, 0x00, 0x02, 0xe0, 0x03, 0xd0, 0xf8, 0x8e, 0x01, 0x02, 0x00,
         ]);
         assert_eq!(cpu.register_x, 0x03);
+    }
+
+    #[test]
+    fn test_jump() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![
+            0xa9, 0x03, 0x4c, 0x08, 0x06, 0x00, 0x00, 0x00, 0x8d, 0x00, 0x02,
+        ]);
+        assert_eq!(cpu.register_a, 0x03);
+    }
+
+    #[test]
+    fn test_jsr_rts() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![
+            0x20, 0x09, 0x06, // jsr init
+            0x20, 0x0c, 0x06, // jsr look
+            0x20, 0x12, 0x06, // jsr end
+            // init:
+            0xa2, 0x00, // ldx #$00
+            0x60, //rts
+            // loop:
+            0xe8, // inx
+            0xe0, 0x05, // cpx #$05
+            0xd0, 0xfb, // bne loop
+            0x60, //rts
+            // end:
+            0x00,
+        ]);
+        println!("{}", cpu.register_x);
+        assert_eq!(cpu.register_x, 0x05);
     }
 }
