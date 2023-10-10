@@ -263,6 +263,7 @@ impl OpCode {
 }
 
 bitflags! {
+    #[derive(Copy, Clone)]
     pub struct Flag: u8 {
 
     const CARRY = 0b0000_0001;
@@ -292,7 +293,7 @@ impl CPU {
             register_a: 0,
             register_x: 0,
             register_y: 0,
-            status: Flag::empty(),
+            status: Flag::ONE,
             program_counter: 0,
             stack_pointer: 0xff,
             memory: [0; 0xffff],
@@ -471,7 +472,7 @@ impl CPU {
                 0x60 => self.rts(),
 
                 // Interrupts
-                0x00 => return,
+                0x00 => self.brk(),
                 0x40 => self.rti(),
 
                 // Status Register
@@ -613,7 +614,8 @@ impl CPU {
 
         self.status.set(Flag::CARRY, reg_val >= value);
         self.status.set(Flag::ZERO, reg_val == value);
-        self.status.set(Flag::NEGATIVE, (reg_val.wrapping_sub(value) & 0x80) == 0x80);
+        self.status
+            .set(Flag::NEGATIVE, (reg_val.wrapping_sub(value) & 0x80) == 0x80);
     }
     fn dec(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
@@ -686,7 +688,9 @@ impl CPU {
     // Control Flow
     fn branch_if_flag_status(&mut self, flag: Flag, is_set: bool) {
         if self.status.contains(flag) == is_set {
-            self.program_counter = self.program_counter.wrapping_add_signed((self.mem_read(self.program_counter) as i8) as i16);
+            self.program_counter = self
+                .program_counter
+                .wrapping_add_signed((self.mem_read(self.program_counter) as i8) as i16);
         }
     }
     fn jmp(&mut self, mode: &AddressingMode) {
@@ -706,6 +710,14 @@ impl CPU {
     }
 
     // Interrupts
+    fn brk(&mut self) {
+        self.mem_write_u16(self.stack_pointer as u16 - 1, self.program_counter);
+        self.mem_write(self.stack_pointer as u16 - 2, (self.status | Flag::BREAK_CMD).bits());
+        self.stack_pointer -= 3;
+
+        self.program_counter = self.mem_read_u16(0xFFFE);
+        self.status.insert(Flag::BREAK_CMD);
+    }
     fn rti(&mut self) {
         self.plp();
         self.stack_pointer += 2;
@@ -800,7 +812,7 @@ impl CPU {
         self.stack_pointer -= 1;
     }
     fn php(&mut self) {
-        self.mem_write(self.stack_pointer as u16, self.status.bits());
+        self.mem_write(self.stack_pointer as u16 - 2, (self.status | Flag::BREAK_CMD).bits());
         self.stack_pointer -= 1;
     }
     fn pla(&mut self) {
