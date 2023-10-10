@@ -371,7 +371,6 @@ impl CPU {
         loop {
             let opscode = self.mem_read(self.program_counter);
             self.program_counter += 1;
-            println!("{:#04x}", opscode);
             let instr = &CPU_OPS_CODES[opscode as usize];
             match opscode {
                 0x69 | 0x65 | 0x75 | 0x6d | 0x7d | 0x79 | 0x61 | 0x71 => {
@@ -882,8 +881,48 @@ mod test {
         assert_eq!(cpu.register_a, 0x55);
     }
 
-    // #[test]
-    // fn test_bcc_correct_jump() {
-    //     let mut cpu = CPU::new();
-    // }
+    #[test]
+    fn test_0x69_adc_add_with_carry() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0xf0, 0x69, 0x25, 0x00]);
+        assert_eq!(cpu.register_a, 0x15);
+        assert!(cpu.status.contains(Flag::CARRY));
+    }
+
+    #[test]
+    fn test_0x69_adc_add_carry_not_set() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x10, 0x69, 0x25, 0x00]);
+        assert_eq!(cpu.register_a, 0x35);
+        assert_eq!(cpu.status.contains(Flag::CARRY), false);
+    }
+
+    #[test]
+    fn test_0x29_and() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x05, 0x29, 0x06, 0x00]);
+        assert_eq!(cpu.register_a, 0x04);
+    }
+
+    #[test]
+    fn test_0x0a_asl() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x05, 0x0a, 0x00]);
+        assert_eq!(cpu.register_a, 0x0a);
+    }
+
+    #[test]
+    fn test_0x24_bit_no_set_zero() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x05, 0x85, 0x10, 0xa9, 0x04, 0x24, 0x10, 0x00]);
+        assert_eq!(cpu.status.contains(Flag::ZERO), false);
+    }
+
+    #[test]
+    fn test_0x24_bit_set_zero() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x05, 0x85, 0x10, 0xa9, 0x0a, 0x24, 0x10, 0x00]);
+        assert_eq!(cpu.status.contains(Flag::ZERO), true);
+    }
+
 }
