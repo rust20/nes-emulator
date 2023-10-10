@@ -372,6 +372,7 @@ impl CPU {
             let opscode = self.mem_read(self.program_counter);
             self.program_counter += 1;
             let instr = &CPU_OPS_CODES[opscode as usize];
+            // println!("{:#04x}: {}", opscode, instr.instr);
             match opscode {
                 0x69 | 0x65 | 0x75 | 0x6d | 0x7d | 0x79 | 0x61 | 0x71 => {
                     self.adc(&instr.addressing_mode);
@@ -604,15 +605,15 @@ impl CPU {
         let addr = self.get_operand_address(mode);
         let value = self.mem_read(addr);
 
-        let register = match register {
+        let reg_val = match register {
             Register::A => self.register_a,
             Register::X => self.register_x,
             Register::Y => self.register_y,
         };
 
-        self.status.set(Flag::CARRY, register >= value);
-        self.status.set(Flag::ZERO, register == value);
-        self.status.set(Flag::NEGATIVE, register < value);
+        self.status.set(Flag::CARRY, reg_val >= value);
+        self.status.set(Flag::ZERO, reg_val == value);
+        self.status.set(Flag::NEGATIVE, (reg_val.wrapping_sub(value) & 0x80) == 0x80);
     }
     fn dec(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
@@ -685,7 +686,7 @@ impl CPU {
     // Control Flow
     fn branch_if_flag_status(&mut self, flag: Flag, is_set: bool) {
         if self.status.contains(flag) == is_set {
-            self.program_counter += self.mem_read(self.program_counter) as u16;
+            self.program_counter = self.program_counter.wrapping_add_signed((self.mem_read(self.program_counter) as i8) as i16);
         }
     }
     fn jmp(&mut self, mode: &AddressingMode) {
@@ -925,4 +926,40 @@ mod test {
         assert_eq!(cpu.status.contains(Flag::ZERO), true);
     }
 
+    #[test]
+    fn test_0xe0_cpx_compare_x_eq() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa2, 0x10, 0xe0, 0x10, 0x00]);
+        assert_eq!(cpu.status.contains(Flag::CARRY), true);
+        assert_eq!(cpu.status.contains(Flag::ZERO), true);
+        assert_eq!(cpu.status.contains(Flag::NEGATIVE), false);
+    }
+
+    #[test]
+    fn test_0xe0_cpx_compare_x_geq() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa2, 0x10, 0xe0, 0x05, 0x00]);
+        assert_eq!(cpu.status.contains(Flag::CARRY), true);
+        assert_eq!(cpu.status.contains(Flag::ZERO), false);
+        assert_eq!(cpu.status.contains(Flag::NEGATIVE), false);
+    }
+
+    #[test]
+    fn test_0xe0_cpx_compare_x_lt() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa2, 0x02, 0xe0, 0x03, 0x00]);
+        assert_eq!(cpu.status.contains(Flag::CARRY), false);
+        assert_eq!(cpu.status.contains(Flag::ZERO), false);
+        assert_eq!(cpu.status.contains(Flag::NEGATIVE), true);
+    }
+
+    // #[ignore]
+    #[test]
+    fn test_branching() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![
+            0xa2, 0x08, 0xca, 0x8e, 0x00, 0x02, 0xe0, 0x03, 0xd0, 0xf8, 0x8e, 0x01, 0x02, 0x00,
+        ]);
+        assert_eq!(cpu.register_x, 0x03);
+    }
 }
