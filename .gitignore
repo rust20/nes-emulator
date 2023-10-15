@@ -1,3 +1,6 @@
 /target
-*.profraw
-
+/*.profraw
+/*.profdata
+tarpaulin*
+/output*
+/rom

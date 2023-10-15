@@ -3,6 +3,8 @@ use lazy_static::lazy_static;
 
 use rand::Rng;
 use std::collections::HashMap;
+
+#[allow(unused_imports)]
 use std::{thread, time::Duration};
 
 use sdl2::event::Event;
@@ -173,7 +175,6 @@ lazy_static! {
     opcodes[0x38] = OpCode::new(0x38, "SEC", 1, 2, AddressingMode::NoneAddressing);
     opcodes[0xf8] = OpCode::new(0xf8, "SED", 1, 2, AddressingMode::NoneAddressing);
     opcodes[0x78] = OpCode::new(0x78, "SEI", 1, 2, AddressingMode::NoneAddressing);
-
 
     // A,X,Y Registers
     // CPX CPY DEX DEY INC INX INY LDA LDX LDY STA STX STY
@@ -434,14 +435,12 @@ pub struct CPU {
     pub status: Flag,
     pub program_counter: u16,
     pub stack_pointer: u8,
+
+    pub bus: Bus,
+
     memory: [u8; 0xFFFF],
 
     pub cpu_cycle: u64,
-
-    pub random_state: Vec<u8>,
-    fn_stack: Vec<String>,
-    instr_addr_map: HashMap<Vec<u8>, String>,
-    last_jump: String,
 }
 
 impl Mem for CPU {
@@ -455,32 +454,7 @@ impl Mem for CPU {
 }
 
 impl CPU {
-    pub fn new() -> Self {
-
-        let mut instr = HashMap::new();
-
-        // jsr
-        instr.insert(vec![0x20, 0x06, 0x06], "init".to_string()                         );
-        instr.insert(vec![0x20, 0x0d, 0x06], "initSnake".to_string()                    ); 
-        instr.insert(vec![0x20, 0x19, 0x07], "drawApple".to_string()                    ); 
-        instr.insert(vec![0x20, 0x20, 0x07], "drawSnake".to_string()                    ); 
-        instr.insert(vec![0x20, 0x2a, 0x06], "generateApplePosition".to_string()        ); 
-        instr.insert(vec![0x20, 0x2a, 0x06], "generateApplePossition".to_string()       ); 
-        instr.insert(vec![0x20, 0x2d, 0x07], "spinWheels".to_string()                   ); 
-        instr.insert(vec![0x20, 0x38, 0x06], "loop".to_string()                         ); 
-        instr.insert(vec![0x20, 0x4d, 0x06], "readKeys".to_string()                     ); 
-        instr.insert(vec![0x20, 0x8d, 0x06], "checkCollision".to_string()               ); 
-        instr.insert(vec![0x20, 0x94, 0x06], "checkAppleCollision".to_string()          ); 
-        instr.insert(vec![0x20, 0xa8, 0x06], "checkSnakeCollision".to_string()          ); 
-        instr.insert(vec![0x20, 0xc3, 0x06], "updateSnake".to_string()                  ); 
-
-
-        // jmp
-        instr.insert(vec![0x4c, 0x38, 0x06], "loop".to_string());
-        instr.insert(vec![0x4c, 0xaa, 0x06], "snakeCollisionLoop".to_string());
-        instr.insert(vec![0x4c, 0x35, 0x07], "gameOver".to_string());
-
-
+    pub fn new(bus: Bus) -> Self {
         CPU {
             register_a: 0,
             register_x: 0,
@@ -488,14 +462,12 @@ impl CPU {
             status: Flag::ONE,
             program_counter: 0,
             stack_pointer: 0xff,
+
+            bus,
+
             memory: [0; 0xffff],
 
             cpu_cycle: 0,
-
-            random_state: Vec::new(),
-            fn_stack: Vec::new(),
-            instr_addr_map: instr,
-            last_jump: "".to_string(),
         }
     }
 
@@ -535,7 +507,6 @@ impl CPU {
             AddressingMode::Relative => {
                 self.program_counter + self.mem_read(self.program_counter) as u16
             }
-            // AddressingMode::NoneAddressing => panic!("mode {:?} is not supported", mode),
             AddressingMode::NoneAddressing => 0,
         }
     }
@@ -558,123 +529,6 @@ impl CPU {
         self.run_with_callback(|_| {});
     }
 
-    fn trace(&mut self) -> String {
-        let opscode = self.mem_read(self.program_counter);
-        let instr = &CPU_OPS_CODES[opscode as usize];
-        let opscode1 = opscode;
-        let opscode2 : String= if instr.bytes > 1 {
-            let raw_opscode2 = self.mem_read(self.program_counter+1);
-            format!("{:02X}", raw_opscode2)
-        } else {
-            String::from("  ")
-        };
-        let opscode3 : String= if instr.bytes > 2 {
-            let raw_opscode3 = self.mem_read(self.program_counter+2);
-            format!("{:02X}", raw_opscode3)
-        } else {
-            String::from("  ")
-        };
-        let instr_arg = match instr.addressing_mode {
-            AddressingMode::Immediate => {
-                let val = self.mem_read(self.program_counter+1);
-                format!("#${:02X}", val)
-            },
-            AddressingMode::ZeroPage => {
-                let val = self.mem_read(self.program_counter+1);
-                format!("${:02X}", val)
-            },
-            AddressingMode::ZeroPageX => {
-                let val = self.mem_read(self.program_counter+1);
-                format!("${:02X},X", val)
-            },
-            AddressingMode::ZeroPageY => {
-                let val = self.mem_read(self.program_counter+1);
-                format!("${:02X},Y", val)
-            },
-            AddressingMode::Absolute => {
-                let lo = self.mem_read(self.program_counter+1);
-                let hi = self.mem_read(self.program_counter+2);
-                format!("${:02X}{:02X}", hi, lo)
-            },
-            AddressingMode::AbsoluteX => {
-                let lo = self.mem_read(self.program_counter+1);
-                let hi = self.mem_read(self.program_counter+2);
-                format!("${:02X}{:02X},X", hi, lo)
-            },
-            AddressingMode::AbsoluteY => {
-                let lo = self.mem_read(self.program_counter+1);
-                let hi = self.mem_read(self.program_counter+2);
-                format!("${:02X}{:02X},Y", hi, lo)
-            },
-            AddressingMode::IndirectX => {
-                let lo = self.mem_read(self.program_counter+1);
-                format!("(${:02X},X)", lo)
-            },
-            AddressingMode::IndirectY => {
-                let lo = self.mem_read(self.program_counter+1);
-                format!("(${:02X}),Y", lo)
-            },
-            AddressingMode::Indirect => {
-                let lo = self.mem_read(self.program_counter+1);
-                let hi = self.mem_read(self.program_counter+2);
-                format!("(${:02X}{:02X})", hi, lo)
-            },
-            AddressingMode::Relative => {
-                let val = self.mem_read(self.program_counter+1);
-                format!("${:02X}", val)
-            },
-            AddressingMode::NoneAddressing => String::from(""),
-        };
-        // "0067  88        DEY                             A:01 X:00 Y:03 P:26 SP:FD",
-        // "DEY                             "
-        let mut instr_placeholder = instr.instr.to_uppercase().to_string();
-        instr_placeholder.push_str(" ");
-        instr_placeholder.push_str(instr_arg.as_str());
-
-        if instr.instr == "RTS" {
-            self.fn_stack.pop();
-            println!("end: {:?}", self.fn_stack.join(" -> "))
-        }
-
-        if instr.instr == "JSR" {
-            let pc = self.program_counter as usize;
-            let label = self.instr_addr_map.get(&(self.memory[pc..pc+3]).to_vec()).unwrap();
-            self.fn_stack.push(label.to_string());
-            println!("\nenter: {:?}", self.fn_stack.join(" -> "))
-        }
-
-        if instr.instr == "JMP" {
-            let pc = self.program_counter as usize;
-            let label = self.instr_addr_map.get(&(self.memory[pc..pc+3]).to_vec()).unwrap();
-            self.last_jump = label.to_string();
-            println!("\nJUMP TO: {:?}", label);
-        }
-
-        // print_screen_state(self);
-        // print_snake_positions(self);
-        check_snake_change(self);
-
-        // let start = if instr.instr == "JSR" || instr.instr == "JMP" {"\n"} else {""};
-        let end = if instr.instr == "RTS" {"\n"} else {""};
-        // return format!("");
-        format!(
-            "{}{:04X} {:02X} {} {} {: <32}A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} {}{}\n",
-            "",
-            self.program_counter,
-            opscode1,
-            opscode2,
-            opscode3,
-            instr_placeholder,
-            self.register_a,
-            self.register_x,
-            self.register_y,
-            self.status.bits(),
-            self.stack_pointer,
-            print_game_state(self),
-            end,
-        )
-    }
-
     pub fn run_with_callback<F>(&mut self, mut callback: F)
     where
         F: FnMut(&mut CPU),
@@ -690,7 +544,6 @@ impl CPU {
                     opscode, instr.instr
                 );
             }
-            print!("{}", self.trace());
             self.program_counter += 1;
             self.cpu_cycle += 1;
 
@@ -750,7 +603,7 @@ impl CPU {
                 }
 
                 // Control Flow
-                0x90 => { 
+                0x90 => {
                     // bcc -> carry clear
                     self.branch_if_flag_status(Flag::CARRY, false);
                     self.program_counter += instr.bytes as u16 - 1;
@@ -893,7 +746,6 @@ impl CPU {
         self.register_a = result;
         if overflow {
             self.status.insert(Flag::CARRY);
-            // self.status.insert(Flag::OVERFLOW);
         }
         self.status.set(Flag::OVERFLOW, (result & 0x80) == 0x80);
         self.set_zero_and_negative_status_flag(self.register_a);
@@ -911,13 +763,13 @@ impl CPU {
 
         let (result, overflow) = value.overflowing_shl(1);
         self.mem_write(addr, result);
-        self.set_overflow_flag(overflow);
+        self.status.set(Flag::OVERFLOW, overflow);
         self.set_zero_and_negative_status_flag(result);
     }
     fn asl_accumulator(&mut self) {
         let (result, overflow) = self.register_a.overflowing_shl(1);
         self.register_a = result;
-        self.set_overflow_flag(overflow);
+        self.status.set(Flag::OVERFLOW, overflow);
         self.set_zero_and_negative_status_flag(result);
     }
     fn bit(&mut self, mode: &AddressingMode) {
@@ -927,7 +779,10 @@ impl CPU {
         let result = self.register_a & value;
 
         self.set_zero_and_negative_status_flag(result);
-        self.set_overflow_flag(Flag::from_bits(result).unwrap().contains(Flag::OVERFLOW));
+        self.status.set(
+            Flag::OVERFLOW,
+            Flag::from_bits(result).unwrap().contains(Flag::OVERFLOW),
+        );
     }
     fn compare_register(&mut self, register: Register, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
@@ -1041,6 +896,7 @@ impl CPU {
     }
 
     // Interrupts
+    #[allow(dead_code)]
     fn brk(&mut self) {
         self.mem_write_u16(self.stack_pointer as u16 - 1 + 0x100, self.program_counter);
         self.mem_write(
@@ -1165,34 +1021,123 @@ impl CPU {
 
     fn set_zero_and_negative_status_flag(&mut self, value: u8) {
         self.status.set(Flag::ZERO, value == 0);
-        self.status.set(Flag::NEGATIVE, value & 0b1000_0000 > 0);
+        self.status.set(Flag::NEGATIVE, value & 0x80 == 0x80);
     }
-    fn set_overflow_flag(&mut self, value: bool) {
-        self.status.set(Flag::OVERFLOW, value);
+}
+
+pub struct Tracer {
+    pub random_state: Vec<u8>,
+    fn_stack: Vec<String>,
+    instr_addr_map: HashMap<Vec<u8>, String>,
+    last_jump: String,
+}
+
+impl Tracer {
+    pub fn new() -> Self {
+        Self {
+            random_state: Vec::new(),
+            fn_stack: Vec::new(),
+            instr_addr_map: HashMap::new(),
+            last_jump: "".to_string(),
+        }
+    }
+    fn trace(&mut self, cpu: &CPU) -> String {
+        let opscode = cpu.mem_read(cpu.program_counter);
+        let instr = &CPU_OPS_CODES[opscode as usize];
+
+        let opscode1 = opscode;
+        let opscode2: String = if instr.bytes > 1 {
+            let raw_opscode2 = cpu.mem_read(cpu.program_counter + 1);
+            format!("{:02X}", raw_opscode2)
+        } else {
+            String::from("  ")
+        };
+        let opscode3: String = if instr.bytes > 2 {
+            let raw_opscode3 = cpu.mem_read(cpu.program_counter + 2);
+            format!("{:02X}", raw_opscode3)
+        } else {
+            String::from("  ")
+        };
+        let instr_arg = match instr.addressing_mode {
+            AddressingMode::Immediate => format!("#${:02X}", cpu.mem_read(cpu.program_counter + 1)),
+            AddressingMode::ZeroPage => format!("${:02X}", cpu.mem_read(cpu.program_counter + 1)),
+            AddressingMode::ZeroPageX => {
+                format!("${:02X},X", cpu.mem_read(cpu.program_counter + 1))
+            }
+            AddressingMode::ZeroPageY => {
+                format!("${:02X},Y", cpu.mem_read(cpu.program_counter + 1))
+            }
+            AddressingMode::Absolute => {
+                format!("${:04X}", cpu.mem_read_u16(cpu.program_counter + 1))
+            }
+            AddressingMode::AbsoluteX => {
+                format!("${:04X},X", cpu.mem_read_u16(cpu.program_counter + 1))
+            }
+            AddressingMode::AbsoluteY => {
+                format!("${:04X},Y", cpu.mem_read_u16(cpu.program_counter + 1))
+            }
+            AddressingMode::IndirectX => {
+                format!("(${:02X},X)", cpu.mem_read(cpu.program_counter + 1))
+            }
+            AddressingMode::IndirectY => {
+                format!("(${:02X}),Y", cpu.mem_read(cpu.program_counter + 1))
+            }
+            AddressingMode::Indirect => {
+                format!("(${:04X},X)", cpu.mem_read_u16(cpu.program_counter + 1))
+            }
+            AddressingMode::Relative => format!("${:02X}", cpu.mem_read(cpu.program_counter + 1)),
+            AddressingMode::NoneAddressing => String::from(""),
+        };
+
+        // if instr.instr == "RTS" {
+        //     self.fn_stack.pop();
+        //     println!("end: {:?}", self.fn_stack.join(" -> "))
+        // }
+        //
+        // if instr.instr == "JSR" {
+        //     let pc = cpu.program_counter as usize;
+        //     let label = self
+        //         .instr_addr_map
+        //         .get(&(cpu.memory[pc..pc + 3]).to_vec())
+        //         .unwrap();
+        //     self.fn_stack.push(label.to_string());
+        //     println!("\nenter: {:?}", self.fn_stack.join(" -> "))
+        // }
+        //
+        // if instr.instr == "JMP" {
+        //     let pc = cpu.program_counter as usize;
+        //     let label = self
+        //         .instr_addr_map
+        //         .get(&(cpu.memory[pc..pc + 3]).to_vec())
+        //         .unwrap();
+        //     self.last_jump = label.to_string();
+        //     println!("\nJUMP TO: {:?}", label);
+        // }
+
+        format!(
+            "{:04X} {} {: <32}A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}{}",
+            cpu.program_counter,
+            format!("{:02X} {} {}", opscode1, opscode2, opscode3),
+            format!("{} {}", instr.instr.to_uppercase(), instr_arg.as_str()),
+            cpu.register_a,
+            cpu.register_x,
+            cpu.register_y,
+            cpu.status.bits(),
+            cpu.stack_pointer,
+            // if instr.instr == "RTS" { "\n" } else { "" },
+            "",
+        )
     }
 }
 
 fn main() {
-    // let input = vec![0xa9, 0xc0, 0xaa, 0xe8, 0x00];
-    //
-    // absolutes: 
-    // jsr
-    // jmp 0x4c
-    //
-    // branchings: relative
-    //
-    //
-    let input = vec![0x20, 0x06, 0x06, 0x20, 0x38, 0x06, 0x20, 0x0d, 0x06, 0x20, 0x2a, 0x06, 0x60, 0xa9, 0x02, 0x85, 0x02, 0xa9, 0x04, 0x85, 0x03, 0xa9, 0x11, 0x85, 0x10, 0xa9, 0x10, 0x85, 0x12, 0xa9, 0x0f, 0x85, 0x14, 0xa9, 0x04, 0x85, 0x11, 0x85, 0x13, 0x85, 0x15, 0x60, 0xa5, 0xfe, 0x85, 0x00, 0xa5, 0xfe, 0x29, 0x03, 0x18, 0x69, 0x02, 0x85, 0x01, 0x60, 0x20, 0x4d, 0x06, 0x20, 0x8d, 0x06, 0x20, 0xc3, 0x06, 0x20, 0x19, 0x07, 0x20, 0x20, 0x07, 0x20, 0x2d, 0x07, 0x4c, 0x38, 0x06, 0xa5, 0xff, 0xc9, 0x77, 0xf0, 0x0d, 0xc9, 0x64, 0xf0, 0x14, 0xc9, 0x73, 0xf0, 0x1b, 0xc9, 0x61, 0xf0, 0x22, 0x60, 0xa9, 0x04, 0x24, 0x02, 0xd0, 0x26, 0xa9, 0x01, 0x85, 0x02, 0x60, 0xa9, 0x08, 0x24, 0x02, 0xd0, 0x1b, 0xa9, 0x02, 0x85, 0x02, 0x60, 0xa9, 0x01, 0x24, 0x02, 0xd0, 0x10, 0xa9, 0x04, 0x85, 0x02, 0x60, 0xa9, 0x02, 0x24, 0x02, 0xd0, 0x05, 0xa9, 0x08, 0x85, 0x02, 0x60, 0x60, 0x20, 0x94, 0x06, 0x20, 0xa8, 0x06, 0x60, 0xa5, 0x00, 0xc5, 0x10, 0xd0, 0x0d, 0xa5, 0x01, 0xc5, 0x11, 0xd0, 0x07, 0xe6, 0x03, 0xe6, 0x03, 0x20, 0x2a, 0x06, 0x60, 0xa2, 0x02, 0xb5, 0x10, 0xc5, 0x10, 0xd0, 0x06, 0xb5, 0x11, 0xc5, 0x11, 0xf0, 0x09, 0xe8, 0xe8, 0xe4, 0x03, 0xf0, 0x06, 0x4c, 0xaa, 0x06, 0x4c, 0x35, 0x07, 0x60, 0xa6, 0x03, 0xca, 0x8a, 0xb5, 0x10, 0x95, 0x12, 0xca, 0x10, 0xf9, 0xa5, 0x02, 0x4a, 0xb0, 0x09, 0x4a, 0xb0, 0x19, 0x4a, 0xb0, 0x1f, 0x4a, 0xb0, 0x2f, 0xa5, 0x10, 0x38, 0xe9, 0x20, 0x85, 0x10, 0x90, 0x01, 0x60, 0xc6, 0x11, 0xa9, 0x01, 0xc5, 0x11, 0xf0, 0x28, 0x60, 0xe6, 0x10, 0xa9, 0x1f, 0x24, 0x10, 0xf0, 0x1f, 0x60, 0xa5, 0x10, 0x18, 0x69, 0x20, 0x85, 0x10, 0xb0, 0x01, 0x60, 0xe6, 0x11, 0xa9, 0x06, 0xc5, 0x11, 0xf0, 0x0c, 0x60, 0xc6, 0x10, 0xa5, 0x10, 0x29, 0x1f, 0xc9, 0x1f, 0xf0, 0x01, 0x60, 0x4c, 0x35, 0x07, 0xa0, 0x00, 0xa5, 0xfe, 0x91, 0x00, 0x60, 0xa6, 0x03, 0xa9, 0x00, 0x81, 0x10, 0xa2, 0x00, 0xa9, 0x01, 0x81, 0x10, 0x60, 0xa2, 0x00, 0xea, 0xea, 0xca, 0xd0, 0xfb, 0x60];
-
-    let _input = vec![
+    let input = vec![
         0x20, 0x06, 0x06, // jsr init
         0x20, 0x38, 0x06, // jsr loop
-
         // init
         0x20, 0x0d, 0x06, // jsr initSnake
         0x20, 0x2a, 0x06, // jsr generateApplePossition
         0x60, //rts
-
         // init snake
         0xa9, 0x02, // lda
         0x85, 0x02, // sta
@@ -1208,23 +1153,17 @@ fn main() {
         0x85, 0x11, // sta
         0x85, 0x13, // sta
         0x85, 0x15, // sta
-
         0x60, // rts
-        
         // generate apple possition
-        0xa5, 0xfe, 0x85,
-        0x00, 0xa5, 0xfe, 0x29, 0x03, 0x18, 0x69, 0x02, 0x85, 0x01,
+        0xa5, 0xfe, 0x85, 0x00, 0xa5, 0xfe, 0x29, 0x03, 0x18, 0x69, 0x02, 0x85, 0x01, //
         0x60, //rts
-
         0x20, 0x4d, 0x06, // jsr readKeys
         0x20, 0x8d, 0x06, // jsr checkCollision
         0x20, 0xc3, 0x06, // jsr updateSnake
         0x20, 0x19, 0x07, // jsr drawApple
         0x20, 0x20, 0x07, // jsr drawSnake
         0x20, 0x2d, 0x07, // jsr spinWheels
-
-        0x4c, 0x38, 0x06, // jmp loop 
-
+        0x4c, 0x38, 0x06, // jmp loop
         // readkeys
         0xa5, 0xff, // lda
         0xc9, 0x77, // cmp
@@ -1236,39 +1175,32 @@ fn main() {
         0xc9, 0x61, // cmp
         0xf0, 0x22, // beq leftKey
         0x60, // rts
-        
         // upkey
-        0xa9, 0x04, 0x24, 0x02,
+        0xa9, 0x04, 0x24, 0x02, //
         0xd0, 0x26, // bne illegalMove
-        0xa9, 0x01, 0x85, 0x02,
+        0xa9, 0x01, 0x85, 0x02, //
         0x60, // rts
-
         // rightKey
-        0xa9, 0x08, 0x24, 0x02, 
+        0xa9, 0x08, 0x24, 0x02, //
         0xd0, 0x1b, // bne illegalMove
-        0xa9, 0x02, 0x85, 0x02, 
-        0x60, // rts
-
+        0xa9, 0x02, 0x85, 0x02, //
+        //0x60, // rts
         // downKey
-        0xa9, 0x01, 0x24, 0x02, 
+        0xa9, 0x01, 0x24, 0x02, //
         0xd0, 0x10, // bne illegalMove
-        0xa9, 0x04, 0x85, 0x02, 
+        0xa9, 0x04, 0x85, 0x02, //
         0x60, // rts
-
         // leftKey
-        0xa9, 0x02, 0x24, 0x02, 
+        0xa9, 0x02, 0x24, 0x02, //
         0xd0, 0x05, //bne illegalMove
-        0xa9, 0x08, 0x85, 0x02, 
+        0xa9, 0x08, 0x85, 0x02, //
         0x60, // rts
-
         // illegalMove
         0x60, // rts
-
         // checkCollision:
         0x20, 0x94, 0x06, // jsr checkAppleCollision
         0x20, 0xa8, 0x06, // jsr checkSnakeCollision
         0x60, // rts
-
         // checkAppleCollision
         0xa5, 0x00, // lda
         0xc5, 0x10, // cmp
@@ -1278,38 +1210,24 @@ fn main() {
         0xd0, 0x07, // bne doneCheckingAppleCollision
         0xe6, 0x03, // inc
         0xe6, 0x03, // inc
-
         0x20, 0x2a, 0x06, //jsr generateApplePosition
-
         // doneCheckingAppleCollision
-        0x60,
-
-        // checkSnakeCollision
-        0xa2, 0x02, 
-
-        // snakeCollisionLoop
-        0xb5, 0x10, 0xc5, 0x10, 
-        0xd0, 0x06, // bne continueCollisionLoop
-
+        0x60, // checkSnakeCollision
+        0xa2, 0x02, // snakeCollisionLoop
+        0xb5, 0x10, 0xc5, 0x10, 0xd0, //
+        0x06, // bne continueCollisionLoop
         // maybeCollidded
-        0xb5, 0x11,
-        0xc5, 0x11,
+        0xb5, 0x11, 0xc5, 0x11, //
         0xf0, 0x09, // beq didCollide
-
         // continueCollisionLoop
-        0xe8, 0xe8, 0xe4, 0x03, 0xf0, 0x06, 
+        0xe8, 0xe8, 0xe4, 0x03, 0xf0, 0x06, //
         0x4c, 0xaa, 0x06, // jmp snakeCollisionLoop
-
         // didCollide
         0x4c, 0x35, 0x07, //jmp gameOver
-
         // didntCollide
         0x60, //rts
-
         // updateSnake
-        0xa6, 0x03, 0xca, 0x8a, 
-
-        // updateLoop
+        0xa6, 0x03, 0xca, 0x8a, // updateLoop
         0xb5, 0x10, // lda
         0x95, 0x12, // sta
         0xca, //dex
@@ -1323,54 +1241,39 @@ fn main() {
         0xb0, 0x1f, //bcs down
         0x4a, // lsr
         0xb0, 0x2f, //bcs left
-
         // up
-        0xa5, 0x10, 0x38, 0xe9, 0x20,
-        0x85, 0x10, 
+        0xa5, 0x10, 0x38, 0xe9, 0x20, 0x85, 0x10, //
         0x90, 0x01, // bcc upup
         0x60, // rts
-
         // upup
-        0xc6, 0x11, 0xa9, 0x01, 0xc5, 0x11,
-        0xf0, 0x28,  // beq collision
+        0xc6, 0x11, 0xa9, 0x01, 0xc5, 0x11, //
+        0xf0, 0x28, // beq collision
         0x60, // rts
-
         // right
-        0xe6,
-        0x10, 0xa9, 0x1f, 0x24, 0x10, 
+        0xe6, 0x10, 0xa9, 0x1f, 0x24, 0x10, //
         0xf0, 0x1f, // beq collision
         0x60, // rts
-
         // down
-        0xa5, 0x10, 0x18, 0x69, 0x20, 0x85, 0x10,
+        0xa5, 0x10, 0x18, 0x69, 0x20, 0x85, 0x10, //
         0xb0, 0x01, //bcs downdown
         0x60, // rts
-
         // downdown
-        0xe6, 0x11, 0xa9, 0x06, 0xc5, 0x11, 
+        0xe6, 0x11, 0xa9, 0x06, 0xc5, 0x11, //
         0xf0, 0x0c, // beq collision
         0x60, // rts
-
         // left
-        0xc6, 0x10, 0xa5, 0x10, 0x29, 0x1f, 0xc9, 0x1f, 
+        0xc6, 0x10, 0xa5, 0x10, 0x29, 0x1f, 0xc9, 0x1f, //
         0xf0, 0x01, // beq collision
         0x60, // rts
-
         // collision
         0x4c, 0x35, 0x07, // jmp gameOver
-
         // drawApple
-        0xa0, 0x00, 0xa5, 0xfe,
-        0x91, 0x00,
-        0x60, // rts
-
+        0xa0, 0x00, 0xa5, 0xfe, 0x91, 0x00, 0x60, // rts
         // drawSnake
-        0xa6, 0x03, 0xa9, 0x00, 0x81, 0x10, 0xa2, 0x00, 0xa9, 0x01, 0x81, 0x10,
+        0xa6, 0x03, 0xa9, 0x00, 0x81, 0x10, 0xa2, 0x00, 0xa9, 0x01, 0x81, 0x10, //
         0x60, // rts
-
         // spinWheels
         0xa2, 0x00, // lda
-
         // spinLoop
         0xea, // nop
         0xea, // nop
@@ -1399,11 +1302,20 @@ fn main() {
     let mut screen_state = [0 as u8; 32 * 3 * 32];
     let mut rng = rand::thread_rng();
 
-    let mut cpu = CPU::new();
-    cpu.load(input);
-    cpu.reset();
+    let rom_content = vec![
+        0x4e, 0x45, 0x53, 0x1a, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+    ];
+    let rom = Rom::new(&rom_content).unwrap();
+    let bus = Bus::new(rom);
 
+    let mut cpu = CPU::new(bus);
+    cpu.load_and_run(input);
+
+    let mut tracer = Tracer::new();
     cpu.run_with_callback(move |cpu| {
+        print!("{}", tracer.trace(cpu));
+
         handle_user_input(cpu, &mut event_pump);
         cpu.mem_write(0xfe, rng.gen_range(1..16));
 
@@ -1487,77 +1399,12 @@ fn read_screen_state(cpu: &CPU, frame: &mut [u8; 32 * 3 * 32]) -> bool {
     update
 }
 
-fn print_snake_positions(cpu: &CPU) {
-    print!("{}: ", cpu.cpu_cycle);
-    for i in 0x200..0x600 {
-        let color_idx = cpu.mem_read(i as u16);
-        let idx = i - 0x200;
-        if color_idx == 1{
-            print!("[{:X} {} {} {}] ",i,  idx, idx/32, idx%32);
-        }
-    }
-    // println!("");
-}
-
-
-fn check_snake_change(cpu: &mut CPU) {
-    let snake_length = cpu.mem_read(0x03);
-    let snake_body = &cpu.memory[0x10..(0x10+snake_length) as usize];
-    // let curr_snake = snake_body.to_vec().into_iter().map(|x| x as u16).collect::<Vec<u16>>().to_vec();
-    let curr_snake = snake_body;
-
-    if !curr_snake.eq(&cpu.random_state) {
-        println!("{}: changed from {} to {}", cpu.cpu_cycle, format_vec(&cpu.random_state), format_vec(&curr_snake.to_vec()));
-        // print_screen_state(cpu);
-        cpu.random_state = curr_snake.to_vec();
-    }
-
-    // for i in 0x200..0x600 {
-    //     let color_idx = cpu.mem_read(i as u16);
-    //     let idx = i - 0x200;
-    //     if color_idx == 1{
-    //         curr_snake.push(idx);
-    //     }
-    // }
-    // if !curr_snake.eq(&cpu.random_state) {
-    //     println!("{}: changed from {:?} to {:?}", cpu.cpu_cycle, cpu.random_state, curr_snake);
-    //     cpu.random_state = curr_snake;
-    // }
-
-}
-
-fn print_game_state(cpu: &CPU) -> String {
-    
-// ; $00-01 => screen location of apple, stored as two bytes, where the first
-// ;           byte is the least significant.
-// ; $10-11 => screen location of snake head stored as two bytes
-// ; $12-?? => snake body (in byte pairs)
-// ; $02    => direction ; 1 => up    (bin 0001)
-//                       ; 2 => right (bin 0010)
-//                       ; 4 => down  (bin 0100)
-//                       ; 8 => left  (bin 1000)
-// ; $03    => snake length, in number of bytes, not segments
-    let snake_head = cpu.mem_read_u16(0x10);
-    let snake_length = cpu.mem_read(0x03);
-    let snake_dir = cpu.mem_read(0x02);
-    let snake_body = &cpu.memory[0x10..(0x10+snake_length) as usize];
-
-    format!("h:{:04X} l:{} d:{} b:{}", snake_head, snake_length, snake_dir, format_vec(&snake_body.to_vec()))
-}
-
-fn format_vec(v: &Vec<u8>) -> String {
-    let mut addr: Vec<String> = Vec::new();
-    for i in 0..((v.len()/2) as usize) {
-        addr.push(format!("{:02X}{:02X}", v[i+1], v[i]))
-    }
-    format!("[{}]", addr.join(", "))
-}
-
+#[allow(dead_code)]
 fn print_screen_state(cpu: &CPU) {
     for i in 0x200..0x600 {
         let color_idx = cpu.mem_read(i as u16);
         print!("{:X}", color_idx);
-        if (i-0x200+1) % 32 == 0 {
+        if (i - 0x200 + 1) % 32 == 0 {
             println!("");
         }
     }
@@ -1568,56 +1415,48 @@ fn print_screen_state(cpu: &CPU) {
 mod test {
     use super::*;
 
-    // test todo
-    // [x] adc
-    // [ ] bcc
-    // [ ] bcs
-    // [ ] beq
-    // [ ] bit
-    // [ ] bpl
-    // [ ] clc
-    // [x] cmp
-    // [ ] dec
-    // [ ] dex
-    // [ ] inc
-    // [ ] lda
-    // [ ] lsr
-    // [ ] rts
-    // [ ] sbc
-    // [ ] sec
-    // [ ] sta
+    fn new_cpu() -> CPU {
+        let rom_content = vec![
+            0x4e, 0x45, 0x53, 0x1a, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        let rom = Rom::new(&rom_content).unwrap();
+        let bus = Bus::new(rom);
+        let cpu = CPU::new(bus);
+        cpu
+    }
 
     #[test]
     fn test_adc_positive_overflow() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x7f, 0x69, 0x01]);
         assert_eq!(cpu.status.contains(Flag::OVERFLOW), true);
     }
 
     #[test]
     fn test_adc_negative_overflow() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x7f, 0x69, 0x80]);
         assert_eq!(cpu.status.contains(Flag::OVERFLOW), true);
     }
 
     #[test]
     fn test_adc_no_overflow() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x40, 0x69, 0x20]);
         assert_eq!(cpu.status.contains(Flag::OVERFLOW), false);
     }
 
     #[test]
     fn test_asl_shift_left() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x40, 0x0a]);
         assert_eq!(cpu.register_a, 0x80);
     }
 
     #[test]
     fn test_0xa9_lda_immediate_load_data() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x05, 0x00]);
         assert_eq!(cpu.register_a, 0x05);
         assert!(cpu.status.contains(Flag::ZERO) == false);
@@ -1626,14 +1465,14 @@ mod test {
 
     #[test]
     fn test_0xa9_lda_zero_flag() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x00, 0x00]);
         assert!(cpu.status.contains(Flag::ZERO));
     }
 
     #[test]
     fn test_0xaa_tax_move_a_to_x() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x0a, 0xaa, 0x00]);
 
         assert_eq!(cpu.register_x, 10);
@@ -1641,14 +1480,14 @@ mod test {
 
     #[test]
     fn test_5_ops_working_together() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0xc0, 0xaa, 0xe8, 0x00]);
         assert_eq!(cpu.register_x, 0xc1);
     }
 
     #[test]
     fn test_inx_overflow() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0xff, 0xaa, 0xe8, 0xe8, 0x00]);
 
         assert_eq!(cpu.register_x, 1);
@@ -1656,7 +1495,7 @@ mod test {
 
     #[test]
     fn test_lda_from_memory() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.mem_write(0x10, 0x55);
         cpu.load_and_run(vec![0xa5, 0x10, 0x00]);
 
@@ -1665,7 +1504,7 @@ mod test {
 
     #[test]
     fn test_0x69_adc_add_with_carry() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0xf0, 0x69, 0x25, 0x00]);
         assert_eq!(cpu.register_a, 0x15);
         assert!(cpu.status.contains(Flag::CARRY));
@@ -1673,7 +1512,7 @@ mod test {
 
     #[test]
     fn test_0x69_adc_add_carry_not_set() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x10, 0x69, 0x25, 0x00]);
         assert_eq!(cpu.register_a, 0x35);
         assert_eq!(cpu.status.contains(Flag::CARRY), false);
@@ -1681,21 +1520,21 @@ mod test {
 
     #[test]
     fn test_0x29_and() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x05, 0x29, 0x06, 0x00]);
         assert_eq!(cpu.register_a, 0x04);
     }
 
     #[test]
     fn test_0x0a_asl() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x05, 0x0a, 0x00]);
         assert_eq!(cpu.register_a, 0x0a);
     }
 
     #[test]
     fn test_0x16_asl() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         // LDA #$20
         // STA $16
         // LDX #$06
@@ -1707,21 +1546,21 @@ mod test {
 
     #[test]
     fn test_0x24_bit_no_set_zero() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x05, 0x85, 0x10, 0xa9, 0x04, 0x24, 0x10, 0x00]);
         assert_eq!(cpu.status.contains(Flag::ZERO), false);
     }
 
     #[test]
     fn test_0x24_bit_set_zero() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x05, 0x85, 0x10, 0xa9, 0x0a, 0x24, 0x10, 0x00]);
         assert_eq!(cpu.status.contains(Flag::ZERO), true);
     }
 
     #[test]
     fn test_0xe0_cpx_compare_x_eq() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa2, 0x10, 0xe0, 0x10, 0x00]);
         assert_eq!(cpu.status.contains(Flag::CARRY), true);
         assert_eq!(cpu.status.contains(Flag::ZERO), true);
@@ -1730,7 +1569,7 @@ mod test {
 
     #[test]
     fn test_0xe0_cpx_compare_x_geq() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa2, 0x10, 0xe0, 0x05, 0x00]);
         assert_eq!(cpu.status.contains(Flag::CARRY), true);
         assert_eq!(cpu.status.contains(Flag::ZERO), false);
@@ -1739,7 +1578,7 @@ mod test {
 
     #[test]
     fn test_0xe0_cpx_compare_x_lt() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa2, 0x02, 0xe0, 0x03, 0x00]);
         assert_eq!(cpu.status.contains(Flag::CARRY), false);
         assert_eq!(cpu.status.contains(Flag::ZERO), false);
@@ -1751,7 +1590,7 @@ mod test {
     // BRK
     #[test]
     fn test_0x49_eor_xor() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x20, 0x49, 0x10, 0x00]);
         assert_eq!(cpu.register_a, 0x30);
     }
@@ -1761,7 +1600,7 @@ mod test {
     // BRK
     #[test]
     fn test_0x4a_lsr_logical_shift_right_accumulator() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x20, 0x4a, 0x00]);
         assert_eq!(cpu.register_a, 0x10);
     }
@@ -1772,7 +1611,7 @@ mod test {
     // BRK
     #[test]
     fn test_0x4e_lsr_logical_shift_right_absolute() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x20, 0x8d, 0x20, 0x00, 0x4e, 0x20, 0x00, 0x00]);
         assert_eq!(cpu.memory[0x0020], 0x10);
     }
@@ -1782,7 +1621,7 @@ mod test {
     // BRK
     #[test]
     fn test_0x09_ora_immediate() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![0xa9, 0x60, 0x09, 0x30, 0x00]);
         assert_eq!(cpu.register_a, 0x70);
     }
@@ -1790,7 +1629,7 @@ mod test {
     // #[ignore]
     #[test]
     fn test_branching() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![
             0xa2, 0x08, 0xca, 0x8e, 0x00, 0x02, 0xe0, 0x03, 0xd0, 0xf8, 0x8e, 0x01, 0x02, 0x00,
         ]);
@@ -1799,7 +1638,7 @@ mod test {
 
     #[test]
     fn test_jump() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![
             0xa9, 0x03, 0x4c, 0x08, 0x06, 0x00, 0x00, 0x00, 0x8d, 0x00, 0x02,
         ]);
@@ -1808,7 +1647,7 @@ mod test {
 
     #[test]
     fn test_addressing_relative() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         /*
         LDA #$01
         CMP #$02
@@ -1823,7 +1662,7 @@ mod test {
 
     #[test]
     fn test_0xc6_dec_decrement() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         /*
         LDA #$10
         STA $20
@@ -1836,7 +1675,7 @@ mod test {
 
     #[test]
     fn test_jsr_rts() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![
             0x20, 0x09, 0x06, // jsr init
             0x20, 0x0c, 0x06, // jsr look
@@ -1857,14 +1696,13 @@ mod test {
 
     #[test]
     fn test_stack() {
-        let mut cpu = CPU::new();
+        let mut cpu = new_cpu();
         cpu.load_and_run(vec![
             0xa2, 0x00, 0xa0, 0x00, 0x8a, 0x99, 0x00, 0x02, 0x48, 0xe8, 0xc8, 0xc0, 0x10, 0xd0,
             0xf5, 0x68, 0x99, 0x00, 0x02, 0xc8, 0xc0, 0x20, 0xd0, 0xf7,
         ]);
 
         for i in 0x00..0x10 {
-            println!("{} {}", cpu.memory[(0x0200 as u16 + i as u16) as usize], i);
             assert_eq!(cpu.memory[(0x0200 as u16 + i as u16) as usize], i);
         }
         for i in 0x00..0x10 {
@@ -1875,5 +1713,76 @@ mod test {
             );
             assert_eq!(cpu.memory[(0x0210 as u16 + i as u16) as usize], 0x0f - i);
         }
+    }
+
+    fn test_rom() -> Rom {
+        let rom_content = vec![
+            0x4e, 0x45, 0x53, 0x1a, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        let rom = Rom::new(&rom_content).unwrap();
+        rom
+    }
+
+    #[test]
+    fn test_format_trace() {
+        let mut bus = Bus::new(test_rom());
+        bus.mem_write(100, 0xa2);
+        bus.mem_write(101, 0x01);
+        bus.mem_write(102, 0xca);
+        bus.mem_write(103, 0x88);
+        bus.mem_write(104, 0x00);
+
+        let mut cpu = CPU::new(bus);
+        cpu.program_counter = 0x64;
+        cpu.register_a = 1;
+        cpu.register_x = 2;
+        cpu.register_y = 3;
+        let mut result: Vec<String> = vec![];
+        let mut tracer = Tracer::new();
+        cpu.run_with_callback(|cpu| {
+            result.push(tracer.trace(cpu));
+        });
+        assert_eq!(
+            "0064  A2 01     LDX #$01                        A:01 X:02 Y:03 P:24 SP:FD",
+            result[0]
+        );
+        assert_eq!(
+            "0066  CA        DEX                             A:01 X:01 Y:03 P:24 SP:FD",
+            result[1]
+        );
+        assert_eq!(
+            "0067  88        DEY                             A:01 X:00 Y:03 P:26 SP:FD",
+            result[2]
+        );
+    }
+
+    #[test]
+    fn test_format_mem_access() {
+        let mut bus = Bus::new(test_rom());
+        // ORA ($33), Y
+        bus.mem_write(100, 0x11);
+        bus.mem_write(101, 0x33);
+
+        //data
+        bus.mem_write(0x33, 00);
+        bus.mem_write(0x34, 04);
+
+        //target cell
+        bus.mem_write(0x400, 0xAA);
+
+        let mut cpu = CPU::new(bus);
+        cpu.program_counter = 0x64;
+        cpu.register_y = 0;
+        let mut result: Vec<String> = vec![];
+
+        let mut tracer = Tracer::new();
+        cpu.run_with_callback(|cpu| {
+            result.push(tracer.trace(cpu));
+        });
+        assert_eq!(
+            "0064  11 33     ORA ($33),Y = 0400 @ 0400 = AA  A:00 X:00 Y:00 P:24 SP:FD",
+            result[0]
+        );
     }
 }
